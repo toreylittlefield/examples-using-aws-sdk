@@ -1,9 +1,9 @@
 require('dotenv').config();
+const ENDPOINT = process.env.WS_ENDPOINT;
 
 const AWS = require('aws-sdk');
 
-const ENDPOINT = process.env.WS_ENDPOINT;
-const TABLE_NAME = process.env.TABLE_NAME;
+const TABLE_WEBSOCKET = process.env.TABLE_WEBSOCKET;
 
 const credentials = new AWS.SharedIniFileCredentials({ profile: 'roar-coders-torey' });
 AWS.config.credentials = credentials;
@@ -12,27 +12,20 @@ AWS.config.update({ region: 'ap-southeast-2' });
 
 const docClient = new AWS.DynamoDB.DocumentClient();
 
-const apiGateway = new AWS.ApiGatewayManagementApi({ endpoint: ENDPOINT });
-
 /**
  * @typedef {AWS.DynamoDB.DocumentClient.ScanInput} ScanInput
  * @type {ScanInput}
  */
 const params = {
-  // KeyConditionExpression: 'BoardId = :BoardId',
-  // ExpressionAttributeValues: {
-  //   ':BoardId': 'f992080c-e2b1-4959-a617-267b3686497f',
-  // },
-  TableName: TABLE_NAME,
-  // ProjectionExpression: '',
+  TableName: TABLE_WEBSOCKET,
 };
 
 /**
  * @param {ScanInput} params valid aws query input parameters
- * @param {string} attrName the attribute name for the connectionIds
+ * @param {string?} attrName the attribute name for the connectionIds
  * @returns {string[]} - the connectionIds in the board
  */
-async function getConnectionIds(params, attrName) {
+async function getConnectionIds(params, attrName = '') {
   return await docClient
     .scan(params)
     .promise()
@@ -53,21 +46,74 @@ async function getConnectionIds(params, attrName) {
 }
 
 /**
- * @param {string[]} connectionIds
- * @param {object} message
+ * @param {AWS.ApiGatewayManagementApi} apiGateway
  */
-async function broadMessageToConnections(connectionIds, message) {
-  return await Promise.allSettled(
-    connectionIds.map(async (connectionId) =>
-      apiGateway.postToConnection({ ConnectionId: connectionId, Data: message }).promise()
-    )
-  );
+function broadMessageToConnections(apiGateway) {
+  /**
+   * @async
+   * @param {string[]} connectionIds
+   * @param {object} message
+   */
+  return async function send(connectionIds, message) {
+    return await Promise.allSettled(
+      connectionIds.map(async (connectionId) => {
+        return new Promise(async (resolve, reject) => {
+          apiGateway
+            .postToConnection({ ConnectionId: connectionId, Data: JSON.stringify(message) })
+            .promise()
+            .then((req) => resolve({ connectionId, req }))
+            .catch((err) => reject({ connectionId, err }));
+        });
+      })
+    );
+  };
 }
 
-(async () => {
-  const connectionIds = await getConnectionIds(params, 'active_ws_connections');
-  console.log({ connectionIds });
+/**
+ *
+ * @param {Event} event
+ * @returns
+ */
+function createNewApiGateway(event) {
+  const { domainName, stage } = event.requestContext;
+  const endpoint = domainName ? `${domainName}/${stage}` : ENDPOINT;
+  const apiGateway = new AWS.ApiGatewayManagementApi({ endpoint });
+  return apiGateway;
+}
 
-  const res = await broadMessageToConnections(connectionIds, 'hello from node.js');
+/**
+ * @typedef {{message: string}} EventBody
+ * @typedef {string} Body
+ * @typedef {{domainName: string, stage: string, connectionId: string}} RequestContext
+ * @typedef {{requestContext: RequestContext, body: Body }} Event
+ * @param {Event} event
+ */
+module.exports.handler = async (event) => {
+  console.log(JSON.stringify(event, null, 2));
+  /** @type {EventBody} body */
+  const { message } = JSON.parse(event.body);
+  if (!message) {
+    return {
+      statusCode: 418,
+      body: JSON.stringify({ message: 'I am a little tea-pot' }),
+    };
+  }
+  const connectionIds = await getConnectionIds(params);
+  const filteredIds = connectionIds.filter((id) => id !== event.requestContext.connectionId);
+  const send = broadMessageToConnections(createNewApiGateway(event));
+  const res = await send(filteredIds, message);
   console.log(JSON.stringify(res, null, 2));
-})();
+  if (res.every((req) => req.status === 'fulfilled')) {
+    return {
+      statusCode: 200,
+      body: null,
+    };
+  }
+  // retry failed
+  const connectionIdsToRetry = res.filter((req) => req.status === 'rejected').map((req) => req.reason.connectionId);
+  console.log({ connectionIdsToRetry });
+};
+
+const message = 'Custom Message Goes Here!';
+const event = { body: JSON.stringify({ message }), requestContext: {} };
+console.log(module.exports.handler.call(null, event));
