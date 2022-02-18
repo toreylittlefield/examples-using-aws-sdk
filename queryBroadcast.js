@@ -1,6 +1,7 @@
+require('dotenv').config();
 const AWS = require('aws-sdk');
 
-const credentials = new AWS.SharedIniFileCredentials({ profile: 'roar-coders-torey' });
+const credentials = new AWS.SharedIniFileCredentials({ profile: process.env.AWS_CLI_PROFILE });
 AWS.config.credentials = credentials;
 
 AWS.config.update({ region: 'ap-southeast-2' });
