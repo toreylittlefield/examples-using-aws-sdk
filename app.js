@@ -8,11 +8,18 @@ const AWS = require('aws-sdk');
 /** FOR LOCAL TESTING */
 if (process.env.NODE_ENV === 'development') {
   console.log('-----> running in developement mode...');
-  const credentials = new AWS.SharedIniFileCredentials({ profile: process.env.AWS_CLI_PROFILE });
+
+  const YOUR_PROFILE_NAME_AWS_CLI = '' || process.env.AWS_CLI_PROFILE;
+
+  if (!YOUR_PROFILE_NAME_AWS_CLI) {
+    console.log('***** DID YOU REMEMBER TO ADD YOUR PROFILE NAME?...****');
+    throw Error('no profile name provided');
+  }
+
+  const credentials = new AWS.SharedIniFileCredentials({ profile: YOUR_PROFILE_NAME_AWS_CLI });
   AWS.config.credentials = credentials;
 
   AWS.config.update({ region: 'ap-southeast-2' });
-  require('dotenv').config();
 }
 /** FOR LOCAL TESTING */
 
