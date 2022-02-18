@@ -1,8 +1,3 @@
-/** FOR LOCAL TESTING */
-require('dotenv').config();
-const PORT = 3000;
-/** FOR LOCAL TESTING */
-
 const express = require('express');
 const app = express();
 const router = express.Router();
@@ -13,16 +8,16 @@ const AWS = require('aws-sdk');
 /** FOR LOCAL TESTING */
 if (process.env.NODE_ENV === 'development') {
   console.log('-----> running in developement mode...');
-  const credentials = new AWS.SharedIniFileCredentials({ profile: 'roar-coders-torey' });
+  const credentials = new AWS.SharedIniFileCredentials({ profile: process.env.AWS_CLI_PROFILE });
   AWS.config.credentials = credentials;
 
   AWS.config.update({ region: 'ap-southeast-2' });
-  /** FOR LOCAL TESTING */
+  require('dotenv').config();
 }
+/** FOR LOCAL TESTING */
 
 const bodyParser = require('body-parser');
 const cors = require('cors');
-const nodemon = require('nodemon');
 
 const corsOptions = {
   origin: '*',
@@ -59,6 +54,56 @@ const isEmpty = (obj) => {
   }
   return Object.keys(obj).length === 0;
 };
+
+/**@typedef {{colour: string, position: { left: number, top: number }, text: string}} Note*/
+
+/**
+ * @description validates that the note is a valid note based on the keys & vals
+ * @param {Note} note
+ * @returns {boolean} return true false if note is valid
+ */
+function isValidNote(note) {
+  // check if note is not object, is null/undefined, or is an array
+  if (typeof note !== 'object' || note == null || Array.isArray(note)) return false;
+
+  const validNoteStructure = {
+    colour: ['white', 'yellow', 'blue', 'green'],
+    position: { top: Number(), left: Number() },
+    text: String(),
+  };
+
+  // check key length is equal
+  const validNoteKeys = Object.keys(validNoteStructure);
+  const NoteKeys = Object.keys(note);
+  if (NoteKeys.length !== validNoteKeys.length) {
+    return false;
+  }
+
+  // check the position key length
+  if (Object.keys(validNoteStructure.position).length !== Object.keys(note?.position || {}).length) {
+    return false;
+  }
+
+  // check if position exists & left top are numbers
+  if (
+    typeof note?.position?.left != typeof validNoteStructure.position.left ||
+    typeof note?.position?.top != typeof validNoteStructure.position.top
+  ) {
+    return false;
+  }
+
+  // check valid colour prop is one of colours
+  if (!validNoteStructure.colour.some((c) => c === note.colour)) {
+    return false;
+  }
+
+  // check valid text prop is string
+  if (typeof note.text !== typeof validNoteStructure.text) {
+    return false;
+  }
+
+  return true;
+}
 
 const errorReturn = (responseStatus, message, response) => {
   response.status(responseStatus);
@@ -207,7 +252,7 @@ router.post('/board', cors(corsOptions), async (req, res) => {
     };
     res.send(boardIdObj);
   } catch (error) {
-    res.send(JSON.stringify(error));
+    res.send(JSON.stringify(error.message));
   }
 });
 
@@ -275,8 +320,7 @@ router.patch('/board/:BoardId', cors(corsOptions), async (req, res) => {
 
         try {
           await docClient.update(params1).promise();
-          res.status(200);
-          res.send();
+          res.status(200).send();
         } catch (error) {
           res.send(JSON.stringify(error));
         }
@@ -364,11 +408,11 @@ router.post('/board/:BoardId/note', async (req, res) => {
     default:
   }
 
+  /**@type {Note} */
   const textForNote = req.body.singleNote;
 
-  switch (
-    typeof textForNote === 'string' // &&!isEmpty(textForNote)) {
-  ) {
+  switch (isValidNote(textForNote)) {
+    // typeof textForNote === 'string' // &&!isEmpty(textForNote)) {
     case false:
       errorReturn(400, 'Topic for note is invalid', res);
       return;
@@ -524,9 +568,11 @@ router.patch('/board/:boardId/note/:noteId', async (req, res) => {
   //   default:
   // }
 
+  /**@type {Note} */
   const textForNote = req.body.singleNote;
 
-  switch (typeof textForNote === 'string') {
+  switch (isValidNote(textForNote)) {
+    // typeof textForNote === 'string'
     case false:
       errorReturn(400, 'Topic is not valid', res);
       break;
@@ -552,30 +598,59 @@ router.patch('/board/:boardId/note/:noteId', async (req, res) => {
     default:
   }
 
-  let updateNote;
-  let note;
+  /**
+   * index number of noteID in board_notes array
+   * @type {number | null }
+   */
+  const noteIndex = board.Items[0].board_notes.reduce(
+    (acc, note, idx) => (note.note_id === noteID ? (acc = idx) : acc),
+    null
+  );
 
-  for (note in board.Items.find(Boolean).board_notes) {
-    if (board.Items.find(Boolean).board_notes[note].note_id === noteID) {
-      isNotePresent = true;
-      updateNote = {
-        TableName: TABLE_NAME,
-        Key: {
-          BoardId: boardID,
-        },
-        UpdateExpression: `SET board_notes[${note}].topic = :noteText`,
-        ExpressionAttributeValues: {
-          ':noteText': textForNote,
-        },
-      };
-      break;
-    }
-  }
+  /**@type {AWS.DynamoDB.DocumentClient.UpdateItemInput} */
+  const updateNoteParams = {
+    TableName: TABLE_NAME,
+    Key: {
+      BoardId: boardID,
+    },
+    UpdateExpression: `SET board_notes[${noteIndex}].topic = :noteText`,
+    ExpressionAttributeValues: {
+      ':noteText': textForNote,
+    },
+    ReturnValues: 'ALL_NEW',
+  };
+
+  // let updateNote;
+  // let note;
+
+  // for (note in board.Items.find(Boolean).board_notes) {
+  //   if (board.Items.find(Boolean).board_notes[note].note_id === noteID) {
+  //     isNotePresent = true;
+  //     updateNote = {
+  //       TableName: TABLE_NAME,
+  //       Key: {
+  //         BoardId: boardID,
+  //       },
+  //       UpdateExpression: `SET board_notes[${note}].topic = :noteText`,
+  //       ExpressionAttributeValues: {
+  //         ':noteText': textForNote,
+  //       },
+  //     };
+  //     break;
+  //   }
+  // }
 
   try {
-    switch (isNotePresent) {
+    switch (noteIndex !== null) {
+      // isNotePresent
       case true:
-        await docClient.update(updateNote).promise();
+        const response = await docClient
+          .update(updateNoteParams)
+          .promise()
+          .then((res) => console.log('updated response', JSON.stringify({ res: res.Attributes }, null, 2)))
+          .catch((err) => {
+            console.error({ err });
+          });
         res.send();
         return;
       case false:
@@ -652,8 +727,12 @@ router.get('/board/:boardId/note/:noteId', async (req, res) => {
 
 app.use('/', router);
 
-/** uncomment for local testing */
-app.listen(PORT, () => {
-  console.log(`App listening at http://localhost:${PORT}`);
-});
-/** uncomment for local testing */
+if (process.env.NODE_ENV === 'development') {
+  const PORT = 3000;
+  /** uncomment for local testing */
+  app.listen(PORT, () => {
+    console.log(`App listening at http://localhost:${PORT}`);
+  });
+  console.log('-----> server listening in developement mode...');
+  /** uncomment for local testing */
+}
